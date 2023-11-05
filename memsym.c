@@ -10,6 +10,8 @@
 void initialize_physical_memory(FILE* output_file,char* OFF, char* PFN, char* VPN);
 void initialize_TLB();
 void context_switch(int process);
+void load(char* reg,char* arg);
+void add();
 
 // Output file
 FILE* output_file;
@@ -23,9 +25,19 @@ int defined_occured = FALSE;
 // Keeps track of current process id
 int process_id = 0;
 
-//This will point to our representation of physical memory and TLB
+//ptr to representations of physical mem and the TLB
 uint32_t* physical_memory;
 uint8_t* TLB;
+
+//Two registers
+uint32_t r1;
+uint32_t r2;
+
+
+//Register values must be saved and restored when context switching
+//There are 4 processes and 2 registers that need to be saved, use offset of id to get proper values
+uint32_t save_registers[8];
+
 
 char** tokenize_input(char* input) {
     char** tokens = NULL;
@@ -97,7 +109,7 @@ int main(int argc, char* argv[]) {
                 
             }
             else{
-                fprintf(output_file,"%s","Error: attempt to execute instruction before define");  
+                fprintf(output_file,"Current PID: %d. Error: attempt to execute instruction before define\n",process_id);  
                 exit(EXIT_FAILURE);             
             }
             first_instruction = 0;
@@ -113,6 +125,16 @@ int main(int argc, char* argv[]) {
         //Logic for handling ctxswitch
         if(strcmp(tokens[0],"ctxswitch") == 0){
             context_switch(atoi(tokens[1]));
+        }
+
+        //Logic for handling load
+        if(strcmp(tokens[0],"load") == 0){
+            load(tokens[1],tokens[2]);
+        }
+        
+        //Logic for handling add
+        if(strcmp(tokens[0],"add") == 0){
+            add();
         }
 
         
@@ -181,8 +203,60 @@ void context_switch(int process){
         exit(EXIT_FAILURE);        
     }
     else{
+ 
+        //Save registers of current process to save register block
+        save_registers[2*process_id] = r1;
+        save_registers[2*process_id+1] = r2;
+        
+        //change process id
         process_id = process;
+
+        //restore register values of new process
+        r1 = save_registers[2*process_id];
+        r2 = save_registers[2*process_id+1];
+
         fprintf(output_file,"Current PID: %d. Switched execution context to process: %d\n",process_id,process);
     }
 
+}
+
+void load(char* reg,char* arg){
+    
+    uint32_t* register_used = NULL;
+
+    //Determine whether r1 or r2 is used, if neither abort program
+    if(strcmp(reg,"r1") == 0){
+        register_used = &r1;
+    }
+    else if(strcmp(reg,"r2") == 0){
+        register_used = &r2;
+    }
+    else{
+        fprintf(output_file,"Current PID: %d. Error: invalid register operand %s\n",process_id,reg);
+        exit(EXIT_FAILURE);        
+    }
+    
+    //If we are dealing with an immediate, can directly read it into register
+    if((arg[0] == '#')){
+        //Read into register the numerical value of whatever is after the #
+        *register_used = atoi(arg + 1);
+        fprintf(output_file,"Current PID: %d. Loaded immediate %s into register %s\n",process_id,arg + 1,reg);
+    }
+
+    //If we must load a value from memory
+    else{
+    //TODO: implement reading from memory
+
+    }
+}
+
+void add(){
+    //Saving this for the output string
+    uint32_t old_value = r1;
+
+    r1 = r1 + r2;
+    fprintf(output_file, "Current PID: %d. Added contents of registers r1 (%d) "
+                   "and r2 (%d). Result: %d\n",
+                   process_id, old_value, r2, r1);
+     
 }
