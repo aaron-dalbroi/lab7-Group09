@@ -70,10 +70,19 @@ void MapVPNtoPFN(int VPN, int PFN);
 // Unmaps VPN is the current context.
 void UnmapVPN(int VPN);
 
-//
-void load(char *reg, char *arg);
+// Translate VPN to PFN. Returns PFN, -1 if can't be found.
+int VPNtoPFN(int VPN);
 
-//
+// Translates virtual location to physical location. Returns -1 if address is invalid.
+int VirtToPhys(int location);
+
+// Loads the value from location in memory.
+uint32_t LoadFromMemory(int location);
+
+// Stores data in memory.
+void StoreInMemory(int location, uint32_t data);
+
+// Adds the values of two registers.
 void add();
 
 // Output file
@@ -96,6 +105,11 @@ uint32_t * PT[4];
 // Two registers
 uint32_t r1;
 uint32_t r2;
+
+// System metadata.
+int numOffsetBits;
+int numPFNBits;
+int numVPNBits;
 
 // Register values must be saved and restored when context switching
 // There are 4 processes and 2 registers that need to be saved, use offset of id to get proper values
@@ -179,9 +193,9 @@ int main(int argc, char *argv[])
             if (strcmp(tokens[0], "define") == 0)
             {
                 // TODO: Check that atoi will go through.
-                int numOffsetBits = atoi(tokens[1]);
-                int numPFNBits = atoi(tokens[2]);
-                int numVPNBits = atoi(tokens[3]);
+                numOffsetBits = atoi(tokens[1]);
+                numPFNBits = atoi(tokens[2]);
+                numVPNBits = atoi(tokens[3]);
 
                 InitializePhysicalMemory(numOffsetBits, numPFNBits);
                 InitializeTLB();
@@ -219,7 +233,7 @@ int main(int argc, char *argv[])
                 fprintf(output_file, "Current PID: %d. Mapped virtual page number %d to physical frame number %d\n", process_id, VPN, PFN);
             }
 
-            //Call to unmap.
+            // Call to unmap.
             if(strcmp(tokens[0], "unmap") == 0){
                 int VPN = atoi(tokens[1]);
 
@@ -228,10 +242,84 @@ int main(int argc, char *argv[])
                 fprintf(output_file, "Current PID: %d. Unmapped virtual page number %d\n", process_id, VPN);
             }
 
-            // Call to handle load instruction.
-            if (strcmp(tokens[0], "load") == 0)
-            {
-                load(tokens[1], tokens[2]);
+            // Call to load instruction.
+            if(strcmp(tokens[0], "load") == 0){
+                // Figure out the destination.
+                uint32_t * dest;
+                if(strcmp(tokens[1], "r1") == 0){
+                    dest = &r1;
+                }
+                else if(strcmp(tokens[1], "r2") == 0){
+                    dest = &r2;
+                }
+                else{
+                    fprintf(output_file, "Current PID: %d. Error: invalid register operand %s\n", process_id, tokens[1]);
+                }
+
+                // Figure out the source and take appropriate action.
+                uint32_t sourceValue;
+                if(tokens[2][0] == '#'){ // Source is an immediate value.
+                    char immediateValueString[20];
+
+                    int i = 0;
+                    while(tokens[2][i+1] != '\0'){
+                        immediateValueString[i] = tokens[2][i+1];
+                        i++;
+                    }
+
+                    sourceValue = atoi(immediateValueString);
+
+                    // Put the source value where sun don't shine.
+                    *dest = sourceValue;
+
+                    fprintf(output_file, "Current PID: %d. Loaded immediate %d into register %s\n", process_id, sourceValue, tokens[1]);
+                }
+                else{ // Source is in memory.
+
+                    int sourceLocation = atoi(tokens[2]);
+
+                    sourceValue = LoadFromMemory(sourceLocation);
+
+                    // Put the source value where sun don't shine.
+                    *dest = sourceValue;
+
+                    fprintf(output_file, "Current PID: %d. Loaded value of location %d (%d) into register %s\n", process_id, sourceLocation, sourceValue, tokens[1]);
+                }
+            }
+
+            // Call to store instruction.
+            if(strcmp(tokens[0], "store") == 0){
+
+                int destination = atoi(tokens[1]);
+
+                // Figure out the source.
+                uint32_t sourceData;
+                if(strcmp(tokens[2], "r1") == 0){
+                    sourceData = r1;
+                    StoreInMemory(destination, sourceData);
+                    fprintf(output_file, "Current PID: %d. Stored value of register %s (%d) into location %d\n", process_id, tokens[2], sourceData, destination);
+                }
+                else if(strcmp(tokens[2], "r2") == 0){
+                    sourceData= r2;
+                    StoreInMemory(destination, sourceData);
+                    fprintf(output_file, "Current PID: %d. Stored value of register %s (%d) into location %d\n", process_id, tokens[2], sourceData, destination);
+                }
+                else if(tokens[2][0] == '#'){
+                    char immediateValueString[20];
+
+                    int i = 0;
+                    while(tokens[2][i+1] != '\0'){
+                        immediateValueString[i] = tokens[2][i+1];
+                        i++;
+                    }
+
+                    sourceData = atoi(immediateValueString);
+                    StoreInMemory(destination, sourceData);
+                    fprintf(output_file, "Current PID: %d. Stored immediate %d into location %d\n", process_id,  sourceData, destination);
+                }
+                else{
+                    fprintf(output_file, "Current PID: %d. Error: invalid register operand %s\n", process_id, tokens[1]);
+                }
             }
 
             // Call to handle add instruction.
@@ -409,6 +497,8 @@ void TLBIncrementReplacementIndexes(){
 
         if(currentLine.valid){
             currentLine.replacementIndex++;
+
+            TLB[i] = TLBEntryToBinary(&currentLine);
         }
     }
 }
@@ -541,39 +631,79 @@ void UnmapVPN(int VPN){
     PT[process_id][VPN] = LPTEntryToBinary(&ptEntry);
 }
 
-void load(char *reg, char *arg)
-{
+int VPNtoPFN(int VPN){
+    // First, check TLB.
+    int lineIdx = CheckTLBValid(VPN);
 
-    uint32_t *register_used = NULL;
+    if(lineIdx == -1){
+        // No TLB entry. Load PFN from table and update TLB.
 
-    // Determine whether r1 or r2 is used, if neither abort program
-    if (strcmp(reg, "r1") == 0)
-    {
-        register_used = &r1;
+        fprintf(output_file, "Current PID: %d. Translating. Lookup for VPN %d caused a TLB miss\n", process_id, VPN);
+
+        uint32_t ptBinaryEntry = PT[process_id][VPN];
+        LPTEntry ptEntry;
+        BinaryToLPTEntry(ptBinaryEntry, &ptEntry);
+
+        // If entry is invalid, bail.
+        if(!ptEntry.valid){
+            fprintf(output_file, "Current PID: %d. Translating. Translation for VPN %d not found in page table\n", process_id, VPN);
+            // TODO: terminate.
+        }
+
+        fprintf(output_file, "Current PID: %d. Translating. Successfully mapped VPN %d to PFN %d\n", process_id, VPN, ptEntry.PFN);
+
+        MapVPNtoPFN(VPN, ptEntry.PFN); // Update TLB.
+
+        return ptEntry.PFN;
     }
-    else if (strcmp(reg, "r2") == 0)
-    {
-        register_used = &r2;
+    else{
+        // TLB hit. Take the value from TLB.
+        TLBEntry tlbEntry;
+        BinaryToTLBEntry(TLB[lineIdx], &tlbEntry);
+        
+        // If TLB strategy is LRU, replacement indexes must be incremented, and the index
+        // for accessed entry has to be reset.
+        if(strcmp(strategy, "LRU") == 0){
+            TLBIncrementReplacementIndexes();
+
+            tlbEntry.replacementIndex = 0;
+            TLB[lineIdx] = TLBEntryToBinary(&tlbEntry);
+        }
+
+        fprintf(output_file, "Current PID: %d. Translating. Lookup for VPN %d hit in TLB entry %d. PFN is %d\n", process_id, VPN, lineIdx, tlbEntry.PFN);
+
+        return tlbEntry.PFN;
     }
-    else
-    {
-        fprintf(output_file, "Current PID: %d. Error: invalid register operand %s\n", process_id, reg);
-        exit(EXIT_FAILURE);
+}
+
+int VirtToPhys(int location){
+    int locationCopy = location;
+    int VPN = locationCopy >> numOffsetBits;
+    int offset = location & ((1 << numOffsetBits) - 1);
+
+    int PFN = VPNtoPFN(VPN);
+
+    if(PFN == -1){
+        return -1;
     }
 
-    // If we are dealing with an immediate, can directly read it into register
-    if ((arg[0] == '#'))
-    {
-        // Read into register the numerical value of whatever is after the #
-        *register_used = atoi(arg + 1);
-        fprintf(output_file, "Current PID: %d. Loaded immediate %s into register %s\n", process_id, arg + 1, reg);
-    }
+    int physicalAddress = (PFN << numOffsetBits) | offset;
+    
+    return physicalAddress;
+}
 
-    // If we must load a value from memory
-    else
-    {
-        // TODO: implement reading from memory
-    }
+uint32_t LoadFromMemory(int location){
+    int physicalAddress = VirtToPhys(location);
+
+    uint32_t storedValue = physical_memory[physicalAddress];
+
+    return storedValue;
+}
+
+void StoreInMemory(int location, uint32_t data){
+    int physicalAddress = VirtToPhys(location);
+
+    physical_memory[physicalAddress] = data;
 }
 
 void add()
