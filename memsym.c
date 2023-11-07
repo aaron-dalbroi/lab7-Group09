@@ -13,8 +13,7 @@ struct TableLookAsideBufferEntry{
     int PFN; // 8 bits.
     int processID; // 2 bits.
     int valid; // 1 bit.
-    int usedAgo; // 3 bits.
-    int leastRecentlyUsedIndex; // 3 bits.
+    int replacementIndex; // 8 bits.
 } typedef TLBEntry;
 
 // Struct describing contents of a single Linear Page Table entry.
@@ -48,8 +47,28 @@ void InitializePT(int numVPNBits);
 // Swithes context.
 void SwitchToPID(int processID);
 
+// Increments replacement indexes of all valid TLB entries.
+void TLBIncrementReplacementIndexes();
+
 // Checks the TLB for VPN entry. Returns index of valid entry, -1 otherwise.
-int checkTLB(int VPN);
+// Here it checks that TLB entry is valid.
+int CheckTLBValid(int VPN);
+
+// Checks the TLB for VPN entry. Returns index of entry, -1 otherwise.
+// Here it doesn't check that TLB entry is valid.
+int CheckTLB(int VPN);
+
+// Finds first invalid TLB entry. Returns its index. If none are invalid, returns -1.
+int FirstInvalidTLBIndex();
+
+// Finds the index of TLB entry that is next in line to be overridden.
+int OverrideTLBIndex();
+
+// Maps VPN to PFN. 
+void MapVPNtoPFN(int VPN, int PFN);
+
+// Unmaps VPN is the current context.
+void UnmapVPN(int VPN);
 
 //
 void load(char *reg, char *arg);
@@ -192,8 +211,21 @@ int main(int argc, char *argv[])
                 SwitchToPID(atoi(tokens[1]));
             }
 
+            // Call to map.
             if(strcmp(tokens[0], "map") == 0){
+                int VPN = atoi(tokens[1]);
+                int PFN = atoi(tokens[2]);
+                MapVPNtoPFN(VPN, PFN);
+                fprintf(output_file, "Current PID: %d. Mapped virtual page number %d to physical frame number %d\n", process_id, VPN, PFN);
+            }
 
+            //Call to unmap.
+            if(strcmp(tokens[0], "unmap") == 0){
+                int VPN = atoi(tokens[1]);
+
+                UnmapVPN(VPN);
+
+                fprintf(output_file, "Current PID: %d. Unmapped virtual page number %d\n", process_id, VPN);
             }
 
             // Call to handle load instruction.
@@ -243,24 +275,16 @@ uint32_t TLBEntryToBinary(const TLBEntry * entryData){
     binaryData = binaryData << 1;
     binaryData += entryData->valid;
 
-    // Encode usedAgo.
-    binaryData = binaryData << 3;
-    binaryData += entryData->usedAgo;
-
-    // Encode leastRecentlyUsedIndex.
-    binaryData = binaryData << 3;
-    binaryData += entryData->leastRecentlyUsedIndex;
+    // Encode replacementIndex.
+    binaryData = binaryData << 8;
+    binaryData += entryData->replacementIndex;
 
     return binaryData;
 }
 
 void BinaryToTLBEntry(uint32_t binaryData, TLBEntry * entryData){
-    // Decode leastRecentlyUsedIndex.
-    entryData->leastRecentlyUsedIndex = binaryData & 7;
-    binaryData = binaryData >> 3;
-
-    // Decode usedAgo.
-    entryData->usedAgo = binaryData & 7;
+    // Decode replacementIndex.
+    entryData->replacementIndex = binaryData & 255;
     binaryData = binaryData >> 3;
 
     // Decode valid.
@@ -377,17 +401,144 @@ void SwitchToPID(int processID)
     }
 }
 
-int checkTLB(int VPN){
+void TLBIncrementReplacementIndexes(){
+        for(int i = 0; i < 8; i++){
+        // Get the TLB entry in readable format.
+        TLBEntry currentLine;
+        BinaryToTLBEntry(TLB[i], &currentLine);
+
+        if(currentLine.valid){
+            currentLine.replacementIndex++;
+        }
+    }
+}
+
+int CheckTLBValid(int VPN){
 
     for(int i = 0; i < 8; i++){
         // Get the TLB entry in readable format.
         TLBEntry currentLine;
         BinaryToTLBEntry(TLB[i], &currentLine);
 
-        
-
+        if(currentLine.VPN == VPN
+        && currentLine.processID == process_id
+        && currentLine.valid){
+            return i;
+        }
     }
 
+    // If we got here, there is no valid entry.
+    return -1;
+}
+
+int CheckTLB(int VPN){
+
+    for(int i = 0; i < 8; i++){
+        // Get the TLB entry in readable format.
+        TLBEntry currentLine;
+        BinaryToTLBEntry(TLB[i], &currentLine);
+
+        if(currentLine.VPN == VPN
+        && currentLine.processID == process_id){
+            return i;
+        }
+    }
+
+    // If we got here, there is no valid entry.
+    return -1;
+}
+
+int FirstInvalidTLBIndex(){
+    for(int i = 0; i < 8; i++){
+        // Get the TLB entry in readable format.
+        TLBEntry currentLine;
+        BinaryToTLBEntry(TLB[i], &currentLine);
+
+        if(currentLine.valid == 0){
+            return i;
+        }
+    }
+
+    // If we got here, there is no invalid entry.
+    return -1;
+}
+
+int OverrideTLBIndex(){
+    int loosingCount = -1; // The count of current looser index.
+    int loosingIdx = 0;
+
+    for(int i = 0; i < 8 ; i++){
+        // Get the TLB entry in readable format.
+        TLBEntry currentLine;
+        BinaryToTLBEntry(TLB[i], &currentLine);
+
+        if(currentLine.replacementIndex > loosingCount){
+            loosingCount = currentLine.replacementIndex;
+            loosingIdx = i;
+        }
+    }
+
+    return loosingIdx;
+}
+
+void MapVPNtoPFN(int VPN, int PFN){
+    // Update TLB.
+    // First, check if this mapping is already in TLB. Valid or not.
+    int lineIdx = CheckTLB(VPN);
+
+    // If it is not in the TLB yet, find the the first invalid TLB entry.
+    if(lineIdx == -1){
+        lineIdx = FirstInvalidTLBIndex();
+    }
+
+    // If there are no invalid entries, find the TLB entry next in line to override.
+    if(lineIdx == -1){
+        lineIdx = OverrideTLBIndex();
+    }
+
+    // In both FIFO and LRU strategies, we must increment counts now, before putting the data into TLB.
+    TLBIncrementReplacementIndexes();
+
+    // Now that we have the index of TLB to write to, update the TLB.
+    // Create line entry.
+    TLBEntry updateLine;
+    updateLine.VPN = VPN;
+    updateLine.processID = process_id;
+    updateLine.PFN = PFN;
+    updateLine.valid = 1;
+    updateLine.replacementIndex = 0;
+    // Update the TLB line.
+    TLB[lineIdx] = TLBEntryToBinary(&updateLine);
+
+    // Update the page table.
+    // Create line entry.
+    LPTEntry ptEntry;
+    ptEntry.PFN = PFN;
+    ptEntry.valid = 1;
+    PT[process_id][VPN] = LPTEntryToBinary(&ptEntry);
+}
+
+void UnmapVPN(int VPN){
+    // Update TLB.
+    // Find valid mapping.
+    int lineIdx = CheckTLBValid(VPN);
+
+    // If there is a valid mapping unmap it. Otherwise, do nothing.
+    if(lineIdx != -1){
+        // Now that we have the index of TLB to write to, update the TLB.
+        // Create line entry in readable format.
+        TLBEntry updateLine;
+        BinaryToTLBEntry(TLB[lineIdx], &updateLine);
+        updateLine.valid = 0; // The only thing that needs to change. Unmapping == invalidating.
+        // Update the TLB line.
+        TLB[lineIdx] = TLBEntryToBinary(&updateLine);
+    }
+
+    // Update page table.
+    LPTEntry ptEntry;
+    BinaryToLPTEntry(PT[process_id][VPN], &ptEntry);
+    ptEntry.valid = 0; // The only thing that needs to change. Unmapping == invalidating.
+    PT[process_id][VPN] = LPTEntryToBinary(&ptEntry);
 }
 
 void load(char *reg, char *arg)
