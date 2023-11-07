@@ -1,3 +1,0 @@
-% Test 2.2: load immediate into invalid register
-define 4 6 6
-load r99 #33

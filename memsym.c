@@ -113,6 +113,7 @@ uint32_t r2;
 int numOffsetBits;
 int numPFNBits;
 int numVPNBits;
+uint32_t currentTime = 2;
 
 // Register values must be saved and restored when context switching
 // There are 4 processes and 2 registers that need to be saved, use offset of id to get proper values
@@ -272,7 +273,7 @@ int main(int argc, char *argv[])
 
                 uint32_t value = physical_memory[PL];
 
-                fprintf(output_file, "Current PID: %d. Inspected physical location %d. Content: %d\n", process_id, PL, value);
+                fprintf(output_file, "Current PID: %d. Inspected physical location %d. Value: %d\n", process_id, PL, value);
             }
 
             // Call to rinspect.
@@ -305,6 +306,7 @@ int main(int argc, char *argv[])
                 }
                 else{
                     fprintf(output_file, "Current PID: %d. Error: invalid register operand %s\n", process_id, tokens[1]);
+                    exit(EXIT_FAILURE);
                 }
 
                 // Figure out the source and take appropriate action.
@@ -370,6 +372,7 @@ int main(int argc, char *argv[])
                 }
                 else{
                     fprintf(output_file, "Current PID: %d. Error: invalid register operand %s\n", process_id, tokens[1]);
+                    exit(EXIT_FAILURE);
                 }
             }
 
@@ -378,6 +381,8 @@ int main(int argc, char *argv[])
             {
                 add();
             }
+
+            currentTime++;
         }
 
         // Deallocate tokens
@@ -605,7 +610,7 @@ int FirstInvalidTLBIndex(){
 }
 
 int OverrideTLBIndex(){
-    int loosingCount = -1; // The count of current looser index.
+    int loosingCount = currentTime; // The count of current looser index.
     int loosingIdx = 0;
 
     for(int i = 0; i < 8 ; i++){
@@ -613,7 +618,7 @@ int OverrideTLBIndex(){
         TLBEntry currentLine;
         BinaryToTLBEntry(TLB[i], &currentLine);
 
-        if(currentLine.replacementIndex > loosingCount){
+        if(currentLine.replacementIndex < loosingCount){
             loosingCount = currentLine.replacementIndex;
             loosingIdx = i;
         }
@@ -638,7 +643,7 @@ void MapVPNtoPFN(int VPN, int PFN){
     }
 
     // In both FIFO and LRU strategies, we must increment counts now, before putting the data into TLB.
-    TLBIncrementReplacementIndexes();
+    // TLBIncrementReplacementIndexes();
 
     // Now that we have the index of TLB to write to, update the TLB.
     // Create line entry.
@@ -647,7 +652,8 @@ void MapVPNtoPFN(int VPN, int PFN){
     updateLine.processID = process_id;
     updateLine.PFN = PFN;
     updateLine.valid = 1;
-    updateLine.replacementIndex = 0;
+    // updateLine.replacementIndex = 0;
+    updateLine.replacementIndex = currentTime;
     // Update the TLB line.
     TLB[lineIdx] = TLBEntryToBinary(&updateLine);
 
@@ -720,9 +726,10 @@ int VPNtoPFN(int VPN){
         // If TLB strategy is LRU, replacement indexes must be incremented, and the index
         // for accessed entry has to be reset.
         if(strcmp(strategy, "LRU") == 0){
-            TLBIncrementReplacementIndexes();
+            // TLBIncrementReplacementIndexes();
 
-            tlbEntry.replacementIndex = 0;
+            // tlbEntry.replacementIndex = 0;
+            tlbEntry.replacementIndex = currentTime;
             TLB[lineIdx] = TLBEntryToBinary(&tlbEntry);
         }
 
