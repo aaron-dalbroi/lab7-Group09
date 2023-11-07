@@ -85,6 +85,9 @@ void StoreInMemory(int location, uint32_t data);
 // Adds the values of two registers.
 void add();
 
+// Checks if given VPN is a valid entry in page table returns 1 if valid, 0 otherwise.
+int InspectPT(int VPN, int * PFN);
+
 // Output file
 FILE *output_file;
 
@@ -241,6 +244,54 @@ int main(int argc, char *argv[])
 
                 fprintf(output_file, "Current PID: %d. Unmapped virtual page number %d\n", process_id, VPN);
             }
+
+            // Call to pinspect.
+            if(strcmp(tokens[0], "pinspect") == 0){
+                int VPN = atoi(tokens[1]);
+
+                int PFN;
+                int valid = InspectPT(VPN, &PFN);
+
+                fprintf(output_file, "Current PID: %d. Inspected page table entry %d. Physical frame number: %d. Valid: %d\n", process_id, VPN, PFN, valid);
+            }
+
+            // Call to tinspect.
+            if(strcmp(tokens[0], "tinspect") == 0){
+                int TLBN = atoi(tokens[1]);
+
+                TLBEntry tlbEntry;
+                BinaryToTLBEntry(TLB[TLBN], &tlbEntry);
+
+                fprintf(output_file, "Current PID: %d. Inspected TLB entry %d. VPN: %d. PFN: %d. Valid: %d. PID: %d. Timestamp: %d\n",
+                        process_id, TLBN, tlbEntry.VPN, tlbEntry.PFN, tlbEntry.valid, tlbEntry.processID, tlbEntry.replacementIndex);
+            }
+
+            // Call to linspect.
+            if(strcmp(tokens[0], "linspect") == 0){
+                int PL = atoi(tokens[1]);
+
+                uint32_t value = physical_memory[PL];
+
+                fprintf(output_file, "Current PID: %d. Inspected physical location %d. Content: %d\n", process_id, PL, value);
+            }
+
+            // Call to rinspect.
+            if(strcmp(tokens[0], "rinspect") == 0){
+                // Figure out the source.
+                uint32_t * source;
+                if(strcmp(tokens[1], "r1") == 0){
+                    source = &r1;
+                }
+                else if(strcmp(tokens[1], "r2") == 0){
+                    source = &r2;
+                }
+                else{
+                    fprintf(output_file, "Current PID: %d. Error: invalid register operand %s\n", process_id, tokens[1]);
+                }
+
+                fprintf(output_file, "Current PID: %d. Inspected register %s. Content: %d\n", process_id, tokens[1], *source);
+            }
+
 
             // Call to load instruction.
             if(strcmp(tokens[0], "load") == 0){
@@ -619,7 +670,11 @@ void UnmapVPN(int VPN){
         // Create line entry in readable format.
         TLBEntry updateLine;
         BinaryToTLBEntry(TLB[lineIdx], &updateLine);
-        updateLine.valid = 0; // The only thing that needs to change. Unmapping == invalidating.
+        updateLine.valid = 0;
+        updateLine.PFN = 0;
+        updateLine.VPN = 0;
+        updateLine.replacementIndex = 0;
+        updateLine.processID = 0;
         // Update the TLB line.
         TLB[lineIdx] = TLBEntryToBinary(&updateLine);
     }
@@ -627,7 +682,8 @@ void UnmapVPN(int VPN){
     // Update page table.
     LPTEntry ptEntry;
     BinaryToLPTEntry(PT[process_id][VPN], &ptEntry);
-    ptEntry.valid = 0; // The only thing that needs to change. Unmapping == invalidating.
+    ptEntry.valid = 0;
+    ptEntry.PFN = 0;
     PT[process_id][VPN] = LPTEntryToBinary(&ptEntry);
 }
 
@@ -711,4 +767,13 @@ void add()
     fprintf(output_file, "Current PID: %d. Added contents of registers r1 (%d) "
                          "and r2 (%d). Result: %d\n",
             process_id, old_value, r2, r1);
+}
+
+int InspectPT(int VPN, int * PFN){
+        uint32_t ptBinaryEntry = PT[process_id][VPN];
+        LPTEntry ptEntry;
+        BinaryToLPTEntry(ptBinaryEntry, &ptEntry);
+
+        *PFN = ptEntry.PFN;
+        return ptEntry.valid;
 }
