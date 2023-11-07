@@ -373,7 +373,7 @@ uint32_t TLBEntryToBinary(const TLBEntry * entryData){
 void BinaryToTLBEntry(uint32_t binaryData, TLBEntry * entryData){
     // Decode replacementIndex.
     entryData->replacementIndex = binaryData & 255;
-    binaryData = binaryData >> 3;
+    binaryData = binaryData >> 8;
 
     // Decode valid.
     entryData->valid = binaryData & 1;
@@ -468,7 +468,7 @@ void SwitchToPID(int processID)
     // Process must be either 0,1,2, or 3
     if (processID < 0 || processID > 3)
     {
-        fprintf(output_file, "Current PID: %d. Invalid context switch to processID %d\n", process_id, processID);
+        fprintf(output_file, "Current PID: %d. Invalid context switch to process %d\n", process_id, processID);
         exit(EXIT_FAILURE);
     }
     else
@@ -485,7 +485,7 @@ void SwitchToPID(int processID)
         r1 = save_registers[2 * process_id];
         r2 = save_registers[2 * process_id + 1];
 
-        fprintf(output_file, "Current PID: %d. Switched execution context to processID: %d\n", process_id, processID);
+        fprintf(output_file, "Current PID: %d. Switched execution context to process: %d\n", process_id, processID);
     }
 }
 
@@ -647,7 +647,7 @@ int VPNtoPFN(int VPN){
         // If entry is invalid, bail.
         if(!ptEntry.valid){
             fprintf(output_file, "Current PID: %d. Translating. Translation for VPN %d not found in page table\n", process_id, VPN);
-            // TODO: terminate.
+            exit(EXIT_FAILURE);
         }
 
         fprintf(output_file, "Current PID: %d. Translating. Successfully mapped VPN %d to PFN %d\n", process_id, VPN, ptEntry.PFN);
@@ -682,10 +682,6 @@ int VirtToPhys(int location){
     int offset = location & ((1 << numOffsetBits) - 1);
 
     int PFN = VPNtoPFN(VPN);
-
-    if(PFN == -1){
-        return -1;
-    }
 
     int physicalAddress = (PFN << numOffsetBits) | offset;
     
